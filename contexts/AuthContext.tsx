@@ -26,6 +26,30 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
+// Simple password hashing simulation (in production, use bcrypt on backend)
+const hashPassword = (password: string): string => {
+  // This is a simple hash simulation - in production, use proper bcrypt
+  let hash = 0;
+  for (let i = 0; i < password.length; i++) {
+    const char = password.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return Math.abs(hash).toString(36);
+};
+
+// JWT-like token generation
+const generateToken = (userId: string): string => {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const payload = btoa(JSON.stringify({ 
+    userId, 
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60) // 24 hours
+  }));
+  const signature = btoa(`${header}.${payload}.secret`);
+  return `${header}.${payload}.${signature}`;
+};
+
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -38,7 +62,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const loadAuthState = async () => {
     try {
       const authState = await StorageService.getAuthState();
-      if (authState && authState.user) {
+      if (authState && authState.user && authState.token) {
+        // In production, verify JWT token here
         setUser(authState.user);
         setIsAuthenticated(true);
         console.log('User loaded from storage:', authState.user.email);
@@ -61,12 +86,18 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return false;
       }
 
-      // In a real app, you would verify the password hash here
-      // For demo purposes, we'll accept any password
+      // In production, verify password hash against stored hash
+      // For demo, we'll accept any password for existing users
+      const hashedPassword = hashPassword(password);
+      console.log('Password hash:', hashedPassword);
+
+      // Generate JWT-like token
+      const token = generateToken(existingUser.id);
+
       const authState: AuthState = {
         user: existingUser,
         isAuthenticated: true,
-        token: `token_${existingUser.id}_${Date.now()}`,
+        token,
       };
 
       await StorageService.saveAuthState(authState);
@@ -92,28 +123,39 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return false;
       }
 
+      // Hash password (in production, do this on backend with bcrypt)
+      const hashedPassword = hashPassword(password);
+      console.log('Password hashed for registration');
+
+      // Determine role (first user is admin, rest are users)
+      const allUsers = await StorageService.getAllUsers();
+      const role = allUsers.length === 0 ? 'admin' : 'user';
+
       // Create new user
       const newUser: User = {
         id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        email,
-        name,
-        role: 'user',
+        email: email.toLowerCase().trim(),
+        name: name.trim(),
+        role,
         createdAt: new Date(),
       };
 
       await StorageService.saveUser(newUser);
 
+      // Generate JWT-like token
+      const token = generateToken(newUser.id);
+
       const authState: AuthState = {
         user: newUser,
         isAuthenticated: true,
-        token: `token_${newUser.id}_${Date.now()}`,
+        token,
       };
 
       await StorageService.saveAuthState(authState);
       setUser(newUser);
       setIsAuthenticated(true);
       
-      console.log('Registration successful for:', email);
+      console.log('Registration successful for:', email, 'Role:', role);
       return true;
     } catch (error) {
       console.error('Registration error:', error);

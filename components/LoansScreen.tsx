@@ -15,7 +15,7 @@ interface LoansScreenProps {
 
 export const LoansScreen: React.FC<LoansScreenProps> = ({ onTabChange }) => {
   const { user } = useAuth();
-  const [activeView, setActiveView] = useState<'apply' | 'manage'>('apply');
+  const [activeView, setActiveView] = useState<'apply' | 'history'>('apply');
   const [loans, setLoans] = useState<Loan[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -26,48 +26,29 @@ export const LoansScreen: React.FC<LoansScreenProps> = ({ onTabChange }) => {
   const [purpose, setPurpose] = useState('');
 
   useEffect(() => {
-    loadUserData();
+    loadData();
   }, [user]);
 
-  const loadUserData = async () => {
+  const loadData = async () => {
     if (!user) return;
     
     try {
       const [userLoans, userTransactions] = await Promise.all([
         LoanService.getUserLoans(user.id),
-        PaymentService.getTransactionHistory(user.id),
+        PaymentService.getTransactionHistory(user.id)
       ]);
       
       setLoans(userLoans.sort((a, b) => 
         new Date(b.appliedAt).getTime() - new Date(a.appliedAt).getTime()
       ));
       setTransactions(userTransactions);
-      console.log('Loans data loaded');
+      console.log('Loans and transactions loaded');
     } catch (error) {
-      console.error('Error loading loans data:', error);
+      console.error('Error loading data:', error);
     }
   };
 
-  const getSuccessfulPaymentsCount = () => {
-    return transactions.filter(t => t.status === 'Success').length;
-  };
-
-  const isEligibleForLoan = () => {
-    return getSuccessfulPaymentsCount() >= LoanService.MIN_SUCCESSFUL_PAYMENTS;
-  };
-
-  const calculateEMI = () => {
-    const loanAmount = parseFloat(amount);
-    const months = parseInt(termMonths);
-    
-    if (isNaN(loanAmount) || isNaN(months) || loanAmount <= 0 || months <= 0) {
-      return 0;
-    }
-    
-    return LoanService.calculateEMI(loanAmount, months);
-  };
-
-  const handleApplyForLoan = async () => {
+  const handleApplyLoan = async () => {
     if (!user) return;
     
     if (!amount || !purpose) {
@@ -76,15 +57,14 @@ export const LoansScreen: React.FC<LoansScreenProps> = ({ onTabChange }) => {
     }
 
     const loanAmount = parseFloat(amount);
-    const months = parseInt(termMonths);
-
     if (isNaN(loanAmount) || loanAmount < 10000 || loanAmount > 50000) {
       Alert.alert('Error', 'Loan amount must be between ₹10,000 and ₹50,000');
       return;
     }
 
-    if (isNaN(months) || months < 6 || months > 60) {
-      Alert.alert('Error', 'Loan term must be between 6 and 60 months');
+    const months = parseInt(termMonths);
+    if (isNaN(months) || months < 6 || months > 24) {
+      Alert.alert('Error', 'Loan term must be between 6 and 24 months');
       return;
     }
 
@@ -97,7 +77,7 @@ export const LoansScreen: React.FC<LoansScreenProps> = ({ onTabChange }) => {
         purpose,
       };
 
-      const loan = await LoanService.applyForLoan(user.id, loanApplication);
+      const loan = await LoanService.applyForLoan(user.id, loanApplication, transactions);
       
       // Clear form
       setAmount('');
@@ -105,16 +85,14 @@ export const LoansScreen: React.FC<LoansScreenProps> = ({ onTabChange }) => {
       setTermMonths('12');
       
       // Reload loans
-      await loadUserData();
+      await loadData();
       
       // Show result
       Alert.alert(
         'Loan Application Submitted',
-        loan.status === 'Approved' 
-          ? `Congratulations! Your loan of ₹${loanAmount.toLocaleString()} has been approved instantly. EMI: ₹${loan.emiAmount.toLocaleString()}/month`
-          : `Your loan application for ₹${loanAmount.toLocaleString()} is under review. You'll be notified once it's processed.`,
+        `Your loan application for ₹${loanAmount.toLocaleString()} has been ${loan.status.toLowerCase()}.`,
         [
-          { text: 'OK', onPress: () => setActiveView('manage') }
+          { text: 'OK', onPress: () => setActiveView('history') }
         ]
       );
       
@@ -126,126 +104,129 @@ export const LoansScreen: React.FC<LoansScreenProps> = ({ onTabChange }) => {
     }
   };
 
-  const handleRepayEMI = async (loan: Loan, repaymentId: string) => {
-    Alert.alert(
-      'Confirm Repayment',
-      `Are you sure you want to pay EMI of ₹${loan.emiAmount.toLocaleString()}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Pay',
-          onPress: async () => {
-            const success = await LoanService.repayEMI(loan.id, repaymentId);
-            if (success) {
-              Alert.alert('Success', 'EMI payment successful!');
-              await loadUserData();
-            } else {
-              Alert.alert('Error', 'Failed to process EMI payment');
-            }
-          }
-        }
-      ]
+  const handleRepayEMI = async (loanId: string) => {
+    try {
+      const success = await LoanService.repayEMI(loanId);
+      if (success) {
+        await loadData();
+        Alert.alert('Success', 'EMI payment successful!');
+      } else {
+        Alert.alert('Error', 'Failed to process EMI payment');
+      }
+    } catch (error) {
+      console.error('EMI repayment error:', error);
+      Alert.alert('Error', 'Failed to process EMI payment');
+    }
+  };
+
+  const calculateEMI = (principal: number, rate: number, months: number): number => {
+    const monthlyRate = rate / 100 / 12;
+    const emi = (principal * monthlyRate * Math.pow(1 + monthlyRate, months)) / 
+                (Math.pow(1 + monthlyRate, months) - 1);
+    return Math.round(emi);
+  };
+
+  const handleBackToDashboard = () => {
+    onTabChange('dashboard');
+  };
+
+  const renderApplyLoan = () => {
+    const loanAmount = parseFloat(amount) || 0;
+    const months = parseInt(termMonths) || 12;
+    const interestRate = 12; // 12% annual interest rate
+    const emiAmount = loanAmount > 0 ? calculateEMI(loanAmount, interestRate, months) : 0;
+
+    return (
+      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Apply for Loan</Text>
+          <Text style={styles.sectionSubtitle}>
+            Get instant micro-loans from ₹10,000 to ₹50,000
+          </Text>
+          
+          <View style={styles.form}>
+            <Text style={styles.label}>Loan Amount *</Text>
+            <TextInput
+              style={commonStyles.input}
+              value={amount}
+              onChangeText={setAmount}
+              placeholder="Enter amount (₹10,000 - ₹50,000)"
+              keyboardType="numeric"
+              placeholderTextColor={colors.grey}
+            />
+
+            <Text style={styles.label}>Loan Term *</Text>
+            <View style={styles.termContainer}>
+              {['6', '12', '18', '24'].map((term) => (
+                <Pressable
+                  key={term}
+                  style={[
+                    styles.termButton,
+                    termMonths === term && styles.termButtonActive
+                  ]}
+                  onPress={() => setTermMonths(term)}
+                >
+                  <Text style={[
+                    styles.termText,
+                    termMonths === term && styles.termTextActive
+                  ]}>
+                    {term} months
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={styles.label}>Purpose *</Text>
+            <TextInput
+              style={[commonStyles.input, styles.textArea]}
+              value={purpose}
+              onChangeText={setPurpose}
+              placeholder="What will you use this loan for?"
+              placeholderTextColor={colors.grey}
+              multiline
+              numberOfLines={3}
+            />
+
+            {loanAmount > 0 && (
+              <View style={styles.calculatorCard}>
+                <Text style={styles.calculatorTitle}>Loan Summary</Text>
+                <View style={styles.calculatorRow}>
+                  <Text style={styles.calculatorLabel}>Principal Amount:</Text>
+                  <Text style={styles.calculatorValue}>₹{loanAmount.toLocaleString()}</Text>
+                </View>
+                <View style={styles.calculatorRow}>
+                  <Text style={styles.calculatorLabel}>Interest Rate:</Text>
+                  <Text style={styles.calculatorValue}>{interestRate}% per annum</Text>
+                </View>
+                <View style={styles.calculatorRow}>
+                  <Text style={styles.calculatorLabel}>Loan Term:</Text>
+                  <Text style={styles.calculatorValue}>{months} months</Text>
+                </View>
+                <View style={[styles.calculatorRow, styles.calculatorRowHighlight]}>
+                  <Text style={styles.calculatorLabelHighlight}>Monthly EMI:</Text>
+                  <Text style={styles.calculatorValueHighlight}>₹{emiAmount.toLocaleString()}</Text>
+                </View>
+                <View style={styles.calculatorRow}>
+                  <Text style={styles.calculatorLabel}>Total Amount:</Text>
+                  <Text style={styles.calculatorValue}>₹{(emiAmount * months).toLocaleString()}</Text>
+                </View>
+              </View>
+            )}
+
+            <Button
+              onPress={handleApplyLoan}
+              loading={isLoading}
+              style={styles.applyButton}
+            >
+              Apply for Loan
+            </Button>
+          </View>
+        </View>
+      </ScrollView>
     );
   };
 
-  const renderApplyForLoan = () => (
-    <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Apply for Loan</Text>
-        
-        <View style={styles.eligibilityCard}>
-          <View style={styles.eligibilityHeader}>
-            <IconSymbol 
-              name={isEligibleForLoan() ? 'checkmark.circle.fill' : 'exclamationmark.circle.fill'} 
-              size={24} 
-              color={isEligibleForLoan() ? colors.success : colors.warning} 
-            />
-            <Text style={styles.eligibilityTitle}>
-              {isEligibleForLoan() ? 'You are eligible!' : 'Eligibility Check'}
-            </Text>
-          </View>
-          <Text style={styles.eligibilityText}>
-            {isEligibleForLoan() 
-              ? `You have ${getSuccessfulPaymentsCount()} successful payments. Your loan will be auto-approved!`
-              : `You need at least ${LoanService.MIN_SUCCESSFUL_PAYMENTS} successful payments. You currently have ${getSuccessfulPaymentsCount()}.`
-            }
-          </Text>
-          {!isEligibleForLoan() && (
-            <Pressable
-              style={styles.makePaymentButton}
-              onPress={() => onTabChange('payments')}
-            >
-              <Text style={styles.makePaymentText}>Make a Payment</Text>
-              <IconSymbol name="chevron.right" size={16} color={colors.primary} />
-            </Pressable>
-          )}
-        </View>
-
-        <View style={styles.form}>
-          <Text style={styles.label}>Loan Amount *</Text>
-          <TextInput
-            style={commonStyles.input}
-            value={amount}
-            onChangeText={setAmount}
-            placeholder="Enter amount (₹10,000 - ₹50,000)"
-            keyboardType="numeric"
-            placeholderTextColor={colors.grey}
-          />
-
-          <Text style={styles.label}>Loan Term *</Text>
-          <View style={styles.termSelector}>
-            {['6', '12', '18', '24', '36'].map((months) => (
-              <Pressable
-                key={months}
-                style={[
-                  styles.termButton,
-                  termMonths === months && styles.termButtonActive
-                ]}
-                onPress={() => setTermMonths(months)}
-              >
-                <Text style={[
-                  styles.termButtonText,
-                  termMonths === months && styles.termButtonTextActive
-                ]}>
-                  {months} months
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-
-          <Text style={styles.label}>Purpose *</Text>
-          <TextInput
-            style={commonStyles.input}
-            value={purpose}
-            onChangeText={setPurpose}
-            placeholder="Loan purpose (e.g., Business, Personal, Education)"
-            placeholderTextColor={colors.grey}
-          />
-
-          {amount && termMonths && (
-            <View style={styles.emiCard}>
-              <Text style={styles.emiLabel}>Estimated EMI</Text>
-              <Text style={styles.emiAmount}>₹{calculateEMI().toLocaleString()}/month</Text>
-              <Text style={styles.emiDetails}>
-                Interest Rate: {LoanService.INTEREST_RATE}% per annum
-              </Text>
-            </View>
-          )}
-
-          <Button
-            onPress={handleApplyForLoan}
-            loading={isLoading}
-            disabled={!isEligibleForLoan()}
-            style={styles.applyButton}
-          >
-            Apply for Loan
-          </Button>
-        </View>
-      </View>
-    </ScrollView>
-  );
-
-  const renderManageLoans = () => (
+  const renderLoanHistory = () => (
     <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>My Loans</Text>
@@ -261,83 +242,72 @@ export const LoansScreen: React.FC<LoansScreenProps> = ({ onTabChange }) => {
             {loans.map((loan) => (
               <View key={loan.id} style={styles.loanCard}>
                 <View style={styles.loanHeader}>
-                  <View style={styles.loanInfo}>
-                    <Text style={styles.loanAmount}>₹{loan.amount.toLocaleString()}</Text>
-                    <Text style={styles.loanTerm}>{loan.termMonths} months • {loan.interestRate}% interest</Text>
+                  <View style={styles.loanIcon}>
+                    <IconSymbol name="banknote" size={20} color={colors.primary} />
+                  </View>
+                  <View style={styles.loanDetails}>
+                    <Text style={styles.loanTitle}>
+                      ₹{loan.amount.toLocaleString()} Loan
+                    </Text>
+                    <Text style={styles.loanSubtitle}>
+                      {loan.termMonths} months • {loan.interestRate}% interest
+                    </Text>
                     <Text style={styles.loanDate}>
                       Applied on {new Date(loan.appliedAt).toLocaleDateString()}
                     </Text>
                   </View>
-                  <View style={[
-                    styles.statusBadge,
-                    { backgroundColor: 
-                      loan.status === 'Approved' ? colors.success + '20' :
-                      loan.status === 'Rejected' ? colors.error + '20' :
-                      colors.warning + '20'
-                    }
-                  ]}>
-                    <Text style={[
-                      styles.statusText,
-                      { color: 
-                        loan.status === 'Approved' ? colors.success :
-                        loan.status === 'Rejected' ? colors.error :
-                        colors.warning
+                  <View style={styles.loanStatus}>
+                    <View style={[
+                      styles.statusBadge,
+                      { backgroundColor: 
+                        loan.status === 'Approved' ? colors.success + '20' :
+                        loan.status === 'Rejected' ? colors.error + '20' :
+                        colors.warning + '20'
                       }
                     ]}>
-                      {loan.status}
-                    </Text>
-                  </View>
-                </View>
-
-                {loan.status === 'Approved' && (
-                  <View style={styles.loanDetails}>
-                    <View style={styles.loanStat}>
-                      <Text style={styles.statLabel}>EMI Amount</Text>
-                      <Text style={styles.statValue}>₹{loan.emiAmount.toLocaleString()}</Text>
-                    </View>
-                    <View style={styles.loanStat}>
-                      <Text style={styles.statLabel}>Remaining Balance</Text>
-                      <Text style={styles.statValue}>₹{loan.remainingBalance.toLocaleString()}</Text>
-                    </View>
-                    <View style={styles.loanStat}>
-                      <Text style={styles.statLabel}>Paid EMIs</Text>
-                      <Text style={styles.statValue}>
-                        {loan.repayments.filter(r => r.status === 'Paid').length}/{loan.repayments.length}
+                      <Text style={[
+                        styles.statusText,
+                        { color: 
+                          loan.status === 'Approved' ? colors.success :
+                          loan.status === 'Rejected' ? colors.error :
+                          colors.warning
+                        }
+                      ]}>
+                        {loan.status}
                       </Text>
                     </View>
-
+                  </View>
+                </View>
+                
+                {loan.status === 'Approved' && (
+                  <View style={styles.loanProgress}>
+                    <View style={styles.progressRow}>
+                      <Text style={styles.progressLabel}>Remaining Balance:</Text>
+                      <Text style={styles.progressValue}>
+                        ₹{loan.remainingBalance.toLocaleString()}
+                      </Text>
+                    </View>
+                    <View style={styles.progressRow}>
+                      <Text style={styles.progressLabel}>Monthly EMI:</Text>
+                      <Text style={styles.progressValue}>
+                        ₹{loan.emiAmount.toLocaleString()}
+                      </Text>
+                    </View>
+                    
                     {loan.remainingBalance > 0 && (
-                      <View style={styles.repaymentSection}>
-                        <Text style={styles.repaymentTitle}>Next EMI</Text>
-                        {loan.repayments
-                          .filter(r => r.status === 'Pending')
-                          .slice(0, 1)
-                          .map((repayment) => (
-                            <View key={repayment.id} style={styles.repaymentItem}>
-                              <View style={styles.repaymentInfo}>
-                                <Text style={styles.repaymentAmount}>
-                                  ₹{repayment.amount.toLocaleString()}
-                                </Text>
-                                <Text style={styles.repaymentDate}>
-                                  Due: {new Date(repayment.dueDate).toLocaleDateString()}
-                                </Text>
-                              </View>
-                              <Button
-                                size="sm"
-                                onPress={() => handleRepayEMI(loan, repayment.id)}
-                              >
-                                Pay Now
-                              </Button>
-                            </View>
-                          ))
-                        }
-                      </View>
+                      <Button
+                        variant="outline"
+                        onPress={() => handleRepayEMI(loan.id)}
+                        style={styles.repayButton}
+                      >
+                        Pay EMI (₹{loan.emiAmount.toLocaleString()})
+                      </Button>
                     )}
-
+                    
                     {loan.remainingBalance === 0 && (
                       <View style={styles.completedBadge}>
-                        <IconSymbol name="checkmark.circle.fill" size={20} color={colors.success} />
-                        <Text style={styles.completedText}>Loan Fully Repaid</Text>
+                        <IconSymbol name="checkmark.circle.fill" size={16} color={colors.success} />
+                        <Text style={styles.completedText}>Loan Completed</Text>
                       </View>
                     )}
                   </View>
@@ -353,6 +323,11 @@ export const LoansScreen: React.FC<LoansScreenProps> = ({ onTabChange }) => {
   return (
     <View style={commonStyles.container}>
       <View style={styles.header}>
+        <Pressable style={styles.backButton} onPress={handleBackToDashboard}>
+          <IconSymbol name="chevron.left" size={24} color={colors.text} />
+          <Text style={styles.backButtonText}>Dashboard</Text>
+        </Pressable>
+        
         <View style={styles.segmentedControl}>
           <Pressable
             style={[
@@ -365,20 +340,20 @@ export const LoansScreen: React.FC<LoansScreenProps> = ({ onTabChange }) => {
               styles.segmentText,
               activeView === 'apply' && styles.segmentTextActive
             ]}>
-              Apply
+              Apply Loan
             </Text>
           </Pressable>
           
           <Pressable
             style={[
               styles.segmentButton,
-              activeView === 'manage' && styles.segmentButtonActive
+              activeView === 'history' && styles.segmentButtonActive
             ]}
-            onPress={() => setActiveView('manage')}
+            onPress={() => setActiveView('history')}
           >
             <Text style={[
               styles.segmentText,
-              activeView === 'manage' && styles.segmentTextActive
+              activeView === 'history' && styles.segmentTextActive
             ]}>
               My Loans
             </Text>
@@ -386,7 +361,7 @@ export const LoansScreen: React.FC<LoansScreenProps> = ({ onTabChange }) => {
         </View>
       </View>
 
-      {activeView === 'apply' ? renderApplyForLoan() : renderManageLoans()}
+      {activeView === 'apply' ? renderApplyLoan() : renderLoanHistory()}
     </View>
   );
 };
@@ -403,6 +378,18 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingVertical: 8,
+  },
+  backButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: colors.text,
+    marginLeft: 8,
   },
   segmentedControl: {
     flexDirection: 'row',
@@ -434,45 +421,12 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
     color: colors.text,
-    marginBottom: 20,
-  },
-  eligibilityCard: {
-    backgroundColor: colors.card,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  eligibilityHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
     marginBottom: 8,
   },
-  eligibilityTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.text,
-    marginLeft: 8,
-  },
-  eligibilityText: {
-    fontSize: 14,
-    color: colors.grey,
-    lineHeight: 20,
-    marginBottom: 12,
-  },
-  makePaymentButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.primary + '10',
-    borderRadius: 8,
-    padding: 12,
-  },
-  makePaymentText: {
+  sectionSubtitle: {
     fontSize: 16,
-    fontWeight: '500',
-    color: colors.primary,
+    color: colors.grey,
+    marginBottom: 24,
   },
   form: {
     gap: 16,
@@ -483,59 +437,87 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginBottom: 8,
   },
-  termSelector: {
+  termContainer: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 8,
-    marginBottom: 16,
   },
   termButton: {
+    flex: 1,
+    paddingVertical: 12,
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1,
+    borderRadius: 8,
+    borderWidth: 2,
     borderColor: colors.border,
     backgroundColor: colors.card,
+    alignItems: 'center',
   },
   termButtonActive: {
     borderColor: colors.primary,
     backgroundColor: colors.primary + '10',
   },
-  termButtonText: {
+  termText: {
     fontSize: 14,
     fontWeight: '500',
     color: colors.grey,
   },
-  termButtonTextActive: {
+  termTextActive: {
     color: colors.primary,
   },
-  emiCard: {
-    backgroundColor: colors.backgroundAlt,
+  textArea: {
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  calculatorCard: {
+    backgroundColor: colors.card,
     borderRadius: 12,
     padding: 16,
-    alignItems: 'center',
-    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginTop: 8,
   },
-  emiLabel: {
+  calculatorTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: colors.text,
+    marginBottom: 12,
+  },
+  calculatorRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  calculatorRowHighlight: {
+    backgroundColor: colors.primary + '10',
+    marginHorizontal: -8,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    marginVertical: 4,
+  },
+  calculatorLabel: {
     fontSize: 14,
     color: colors.grey,
-    marginBottom: 4,
   },
-  emiAmount: {
-    fontSize: 24,
+  calculatorValue: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: colors.text,
+  },
+  calculatorLabelHighlight: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  calculatorValueHighlight: {
+    fontSize: 16,
     fontWeight: '700',
     color: colors.primary,
-    marginBottom: 4,
-  },
-  emiDetails: {
-    fontSize: 12,
-    color: colors.grey,
   },
   applyButton: {
     marginTop: 16,
   },
   loansList: {
-    gap: 16,
+    gap: 12,
   },
   loanCard: {
     backgroundColor: colors.card,
@@ -546,20 +528,27 @@ const styles = StyleSheet.create({
   },
   loanHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 16,
   },
-  loanInfo: {
+  loanIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.backgroundAlt,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  loanDetails: {
     flex: 1,
   },
-  loanAmount: {
-    fontSize: 24,
-    fontWeight: '700',
+  loanTitle: {
+    fontSize: 16,
+    fontWeight: '600',
     color: colors.text,
     marginBottom: 4,
   },
-  loanTerm: {
+  loanSubtitle: {
     fontSize: 14,
     color: colors.grey,
     marginBottom: 2,
@@ -568,79 +557,57 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.grey,
   },
+  loanStatus: {
+    alignItems: 'flex-end',
+  },
   statusBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
   statusText: {
     fontSize: 12,
     fontWeight: '600',
   },
-  loanDetails: {
+  loanProgress: {
+    marginTop: 16,
+    paddingTop: 16,
     borderTopWidth: 1,
     borderTopColor: colors.border,
-    paddingTop: 16,
   },
-  loanStat: {
+  progressRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
   },
-  statLabel: {
+  progressLabel: {
     fontSize: 14,
     color: colors.grey,
   },
-  statValue: {
-    fontSize: 16,
+  progressValue: {
+    fontSize: 14,
     fontWeight: '600',
     color: colors.text,
   },
-  repaymentSection: {
-    marginTop: 16,
-    padding: 16,
-    backgroundColor: colors.backgroundAlt,
-    borderRadius: 8,
-  },
-  repaymentTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: 12,
-  },
-  repaymentItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  repaymentInfo: {
-    flex: 1,
-  },
-  repaymentAmount: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: 2,
-  },
-  repaymentDate: {
-    fontSize: 12,
-    color: colors.grey,
+  repayButton: {
+    marginTop: 12,
   },
   completedBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 16,
-    padding: 12,
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
     backgroundColor: colors.success + '10',
     borderRadius: 8,
   },
   completedText: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '500',
     color: colors.success,
-    marginLeft: 8,
+    marginLeft: 6,
   },
   emptyState: {
     alignItems: 'center',

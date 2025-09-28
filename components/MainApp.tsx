@@ -5,6 +5,7 @@ import { Dashboard } from './Dashboard';
 import { PaymentsScreen } from './PaymentsScreen';
 import { LoansScreen } from './LoansScreen';
 import { ProfileScreen } from './ProfileScreen';
+import { AdminDashboard } from './AdminDashboard';
 import { colors, commonStyles } from '../styles/commonStyles';
 
 export const MainApp: React.FC = () => {
@@ -20,6 +21,8 @@ export const MainApp: React.FC = () => {
         return <LoansScreen onTabChange={setActiveTab} />;
       case 'profile':
         return <ProfileScreen onTabChange={setActiveTab} />;
+      case 'admin':
+        return <AdminDashboard onTabChange={setActiveTab} />;
       default:
         return <Dashboard activeTab={activeTab} onTabChange={setActiveTab} />;
     }

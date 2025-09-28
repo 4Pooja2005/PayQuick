@@ -21,7 +21,7 @@ export const PaymentsScreen: React.FC<PaymentsScreenProps> = ({ onTabChange }) =
   // Payment form state
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
-  const [merchantName, setMerchantName] = useState('');
+  const [upiId, setUpiId] = useState('');
   const [paymentType, setPaymentType] = useState<'UPI' | 'Card'>('UPI');
 
   useEffect(() => {
@@ -50,9 +50,20 @@ export const PaymentsScreen: React.FC<PaymentsScreenProps> = ({ onTabChange }) =
       return;
     }
 
+    if (paymentType === 'UPI' && !upiId) {
+      Alert.alert('Error', 'Please enter UPI ID for UPI payments');
+      return;
+    }
+
     const paymentAmount = parseFloat(amount);
     if (isNaN(paymentAmount) || paymentAmount <= 0) {
       Alert.alert('Error', 'Please enter a valid amount');
+      return;
+    }
+
+    // Validate UPI ID format
+    if (paymentType === 'UPI' && upiId && !isValidUpiId(upiId)) {
+      Alert.alert('Error', 'Please enter a valid UPI ID (e.g., user@paytm, 9876543210@ybl)');
       return;
     }
 
@@ -63,7 +74,7 @@ export const PaymentsScreen: React.FC<PaymentsScreenProps> = ({ onTabChange }) =
         amount: paymentAmount,
         type: paymentType,
         description,
-        merchantName: merchantName || undefined,
+        upiId: paymentType === 'UPI' ? upiId : undefined,
       };
 
       const transaction = await PaymentService.processPayment(user.id, paymentRequest);
@@ -71,7 +82,7 @@ export const PaymentsScreen: React.FC<PaymentsScreenProps> = ({ onTabChange }) =
       // Clear form
       setAmount('');
       setDescription('');
-      setMerchantName('');
+      setUpiId('');
       
       // Reload transactions
       await loadTransactions();
@@ -93,13 +104,29 @@ export const PaymentsScreen: React.FC<PaymentsScreenProps> = ({ onTabChange }) =
     }
   };
 
-  const handleDownloadInvoice = (transaction: Transaction) => {
-    const invoiceData = PaymentService.generateInvoiceData(transaction);
-    Alert.alert(
-      'Invoice Generated',
-      `Invoice data for transaction ${transaction.id.slice(-8).toUpperCase()}:\n\n${invoiceData}`,
-      [{ text: 'OK' }]
-    );
+  const isValidUpiId = (upiId: string): boolean => {
+    // Basic UPI ID validation
+    const upiRegex = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+$/;
+    return upiRegex.test(upiId);
+  };
+
+  const handleDownloadInvoice = async (transaction: Transaction) => {
+    try {
+      console.log('Downloading invoice for transaction:', transaction.id);
+      const success = await PaymentService.downloadInvoice(transaction);
+      if (success) {
+        Alert.alert('Success', 'Invoice downloaded successfully!');
+      } else {
+        Alert.alert('Error', 'Failed to download invoice. Please try again.');
+      }
+    } catch (error) {
+      console.error('Invoice download error:', error);
+      Alert.alert('Error', 'Failed to download invoice. Please try again.');
+    }
+  };
+
+  const handleBackToDashboard = () => {
+    onTabChange('dashboard');
   };
 
   const renderMakePayment = () => (
@@ -161,14 +188,20 @@ export const PaymentsScreen: React.FC<PaymentsScreenProps> = ({ onTabChange }) =
             placeholderTextColor={colors.grey}
           />
 
-          <Text style={styles.label}>Merchant Name (Optional)</Text>
-          <TextInput
-            style={commonStyles.input}
-            value={merchantName}
-            onChangeText={setMerchantName}
-            placeholder="Merchant or store name"
-            placeholderTextColor={colors.grey}
-          />
+          {paymentType === 'UPI' && (
+            <>
+              <Text style={styles.label}>UPI ID *</Text>
+              <TextInput
+                style={commonStyles.input}
+                value={upiId}
+                onChangeText={setUpiId}
+                placeholder="e.g., user@paytm, 9876543210@ybl"
+                placeholderTextColor={colors.grey}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </>
+          )}
 
           <Button
             onPress={handleMakePayment}
@@ -208,7 +241,7 @@ export const PaymentsScreen: React.FC<PaymentsScreenProps> = ({ onTabChange }) =
                   <View style={styles.transactionDetails}>
                     <Text style={styles.transactionTitle}>{transaction.description}</Text>
                     <Text style={styles.transactionSubtitle}>
-                      {transaction.merchantName || 'PayLite+Loans'} • {transaction.type}
+                      {transaction.upiId || 'PayLite+Loans'} • {transaction.type}
                     </Text>
                     <Text style={styles.transactionDate}>
                       {new Date(transaction.createdAt).toLocaleDateString()} at{' '}
@@ -261,6 +294,11 @@ export const PaymentsScreen: React.FC<PaymentsScreenProps> = ({ onTabChange }) =
   return (
     <View style={commonStyles.container}>
       <View style={styles.header}>
+        <Pressable style={styles.backButton} onPress={handleBackToDashboard}>
+          <IconSymbol name="chevron.left" size={24} color={colors.text} />
+          <Text style={styles.backButtonText}>Dashboard</Text>
+        </Pressable>
+        
         <View style={styles.segmentedControl}>
           <Pressable
             style={[
@@ -311,6 +349,18 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingVertical: 8,
+  },
+  backButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: colors.text,
+    marginLeft: 8,
   },
   segmentedControl: {
     flexDirection: 'row',

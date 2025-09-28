@@ -1,41 +1,24 @@
 
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
-import { Stack } from 'expo-router';
-import { AuthProvider, useAuth } from '../../contexts/AuthContext';
+import { AuthProvider } from '../../contexts/AuthContext';
 import { AuthScreen } from '../../components/AuthScreen';
 import { MainApp } from '../../components/MainApp';
-import { colors } from '../../styles/commonStyles';
+import { useAuth } from '../../contexts/AuthContext';
 
 const AppContent: React.FC = () => {
   const { isAuthenticated, isLoading } = useAuth();
 
   if (isLoading) {
-    return <View style={styles.container} />;
+    return null; // You could add a loading screen here
   }
 
   return isAuthenticated ? <MainApp /> : <AuthScreen />;
 };
 
-export default function HomeScreen() {
+export default function Index() {
   return (
-    <>
-      <Stack.Screen
-        options={{
-          title: "PayLite+Loans",
-          headerShown: false,
-        }}
-      />
-      <AuthProvider>
-        <AppContent />
-      </AuthProvider>
-    </>
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-});

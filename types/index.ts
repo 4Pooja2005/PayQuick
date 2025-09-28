@@ -15,7 +15,7 @@ export interface Transaction {
   status: 'Success' | 'Failed' | 'Pending';
   description: string;
   createdAt: Date;
-  merchantName?: string;
+  upiId?: string;
 }
 
 export interface Loan {
@@ -51,7 +51,7 @@ export interface PaymentRequest {
   amount: number;
   type: 'UPI' | 'Card';
   description: string;
-  merchantName?: string;
+  upiId?: string;
 }
 
 export interface LoanApplication {
